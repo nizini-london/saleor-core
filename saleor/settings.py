@@ -2,6 +2,7 @@ import datetime
 import logging
 import os
 import os.path
+import sys
 import warnings
 from typing import cast
 from urllib.parse import urlparse
@@ -259,7 +260,43 @@ if not SECRET_KEY and DEBUG:
     )
     SECRET_KEY = get_random_secret_key()
 
-RSA_PRIVATE_KEY = os.environ.get("RSA_PRIVATE_KEY", None)
+# --- START CUSTOM RSA PRIVATE KEY LOADING FROM MOUNTED FILE ---
+
+# Bypass the enviornment variable check for RSA_PRIVATE_KEY
+# and load it from the secure mounted key file, provided by the
+# Northflank platform.
+
+# Define the path where Northflank mounts the RSA private key file.
+# This path must match the mount path configured in Northflank.
+_RSA_PRIVATE_KEY_MOUNT_PATH = "/app/rsa-private-key.pem"
+
+# Default value for RSA_PRIVATE_KEY. This will be the variable Saleor uses.
+# We initialize it to None. If the file is found, we'll set it.
+# Otherwise, Saleor's existing logic (e.g., os.getenv or DEBUG mode) will be the fallback.
+RSA_PRIVATE_KEY = None # Or whatever Saleor's default settings.py initializes it to before our block
+
+if os.path.exists(_RSA_PRIVATE_KEY_MOUNT_PATH):
+    try:
+        with open(_RSA_PRIVATE_KEY_MOUNT_PATH, "r") as key_file:
+            RSA_PRIVATE_KEY = key_file.read()
+        print(f"DEBUG: Successfully loaded RSA_PRIVATE_KEY from mounted file: {_RSA_PRIVATE_KEY_MOUNT_PATH}", file=sys.stderr)
+
+        # CRITICAL: After successfully loading from file, explicitly remove the problematic
+        # environment variable if it exists. This prevents Northflank's faulty injection
+        # (if it's still somehow injecting something despite being deleted from UI)
+        # from conflicting with the correctly loaded key from the file later.
+        if "RSA_PRIVATE_KEY" in os.environ:
+            print(f"DEBUG: Removing potentially problematic RSA_PRIVATE_KEY from os.environ to avoid conflict.", file=sys.stderr)
+            del os.environ["RSA_PRIVATE_KEY"]
+
+    except Exception as e:
+        # This path is unlikely given your verification, but good for robustness.
+        print(f"ERROR: Failed to read RSA_PRIVATE_KEY from mounted file: {e}. Saleor will fall back to default ENV.", file=sys.stderr)
+else:
+    print(f"WARNING: RSA_PRIVATE_KEY file not found at {_RSA_PRIVATE_KEY_MOUNT_PATH}. Relying on direct ENV var or DEBUG mode.", file=sys.stderr)
+#
+
+# RSA_PRIVATE_KEY = os.environ.get("RSA_PRIVATE_KEY", None)
 RSA_PRIVATE_PASSWORD = os.environ.get("RSA_PRIVATE_PASSWORD", None)
 JWT_MANAGER_PATH = os.environ.get(
     "JWT_MANAGER_PATH", "saleor.core.jwt_manager.JWTManager"
